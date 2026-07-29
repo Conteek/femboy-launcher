@@ -2167,42 +2167,17 @@ async fn launch_minecraft(
     let real_id = real_id.as_str();
 
     let install_dir = get_game_dir();
-    // If launching a modpack (game_dir_override points to a modpack folder), don't launch directly from the modpack folder
-    // because Minecraft will create saves, screenshots and other folders there. Instead create a temporary instance
-    // directory under %APPDATA%/.femboy/instances/<modpack>-<timestamp> and copy the modpack contents into it, then
-    // launch the game from that temp directory and clean it up after the game exits.
-    let mut temp_instance_dir: Option<PathBuf> = None;
+    // Modpack launches use a stable instance dir under %APPDATA%/.femboy/instances/<modpack-id>/.
+    // The instance persists across sessions so saves, options.txt and config changes are kept.
     let run_dir = if let Some(ref override_path) = game_dir_override {
         let pack_dir = PathBuf::from(override_path);
-        // Create instances root
-        let instances_root = get_femboy_dir().join("instances");
-        if let Err(_) = fs::create_dir_all(&instances_root) {}
-        let ts = chrono::Utc::now().timestamp();
-        let pack_name = pack_dir
+        let pack_id = pack_dir
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "modpack".to_string());
-        let temp_dir = instances_root.join(format!("{}-{}", pack_name, ts));
-        fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-
-        // Copy pack contents to temp_dir, but never copy large/managed folders
-        for entry in fs::read_dir(&pack_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if matches!(name.as_str(), "versions" | "assets" | "libraries" | "natives" | "modpacks") {
-                continue;
-            }
-            let src = entry.path();
-            let dst = temp_dir.join(entry.file_name());
-            if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-                copy_dir_recursive(&src, &dst).map_err(|e| e.to_string())?;
-            } else {
-                fs::copy(&src, &dst).map_err(|e| e.to_string())?;
-            }
-        }
-
-        temp_instance_dir = Some(temp_dir.clone());
-        temp_dir
+        let instance_dir = get_modpack_instance_dir(&pack_id);
+        ensure_modpack_instance(&pack_dir, &instance_dir)?;
+        instance_dir
     } else {
         get_game_dir()
     };
@@ -2592,8 +2567,6 @@ async fn launch_minecraft(
     );
 
     let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    // If a temporary instance dir was created for a modpack launch, remember it so we can clean it up after the game exits
-    let cleanup_path = temp_instance_dir.clone();
 
     let (mut rx, _child) = app
         .shell()
@@ -2638,10 +2611,6 @@ async fn launch_minecraft(
                         });
                     }
 
-                    // Clean up temporary instance directory created for modpack launches
-                    if let Some(p) = cleanup_path.clone() {
-                        let _ = fs::remove_dir_all(p);
-                    }
                     if let Some(rpc) = app_clone.try_state::<Arc<rpc::Rpc>>() {
                         rpc.set_activity("В лаунчере", "Просматривает главную страницу");
                     }
@@ -2891,11 +2860,110 @@ fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
     Ok(())
 }
 
+fn get_modpack_instance_dir(modpack_id: &str) -> PathBuf {
+    get_femboy_dir().join("instances").join(modpack_id)
+}
+
+fn merge_config_dir(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    if !src.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let dst_path = dst.join(entry.file_name());
+        if dst_path.exists() {
+            continue;
+        }
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            copy_dir_recursive(&entry.path(), &dst_path).map_err(|e| e.to_string())?;
+        } else {
+            fs::copy(entry.path(), &dst_path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn sync_mods_dir(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    if !src.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+            continue;
+        }
+        let dst_file = dst.join(entry.file_name());
+        fs::copy(entry.path(), &dst_file).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn ensure_modpack_instance(pack_dir: &PathBuf, instance_dir: &PathBuf) -> Result<(), String> {
+    fs::create_dir_all(instance_dir).map_err(|e| e.to_string())?;
+
+    const SKIP: &[&str] = &["versions", "assets", "libraries", "natives", "modpacks"];
+    const PRESERVE: &[&str] = &[
+        "saves",
+        "options.txt",
+        "optionsof.txt",
+        "optionsshaders.txt",
+        "usercache.json",
+        "stats",
+        "screenshots",
+        "logs",
+        "crash-reports",
+        "servers.dat",
+        "servers.dat_old",
+        "resourcepacks",
+        "shaderpacks",
+    ];
+
+    for entry in fs::read_dir(pack_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if SKIP.contains(&name.as_str()) {
+            continue;
+        }
+
+        let src = entry.path();
+        let dst = instance_dir.join(&name);
+        let is_dir = entry.file_type().map_err(|e| e.to_string())?.is_dir();
+
+        if name == "mods" {
+            sync_mods_dir(&src, &dst)?;
+        } else if name == "config" {
+            merge_config_dir(&src, &dst)?;
+        } else if PRESERVE.contains(&name.as_str()) {
+            if !dst.exists() {
+                if is_dir {
+                    copy_dir_recursive(&src, &dst).map_err(|e| e.to_string())?;
+                } else {
+                    fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+                }
+            }
+        } else if !dst.exists() {
+            if is_dir {
+                copy_dir_recursive(&src, &dst).map_err(|e| e.to_string())?;
+            } else {
+                fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn delete_modpack(id: String) -> Result<(), String> {
     let pack_dir = get_modpacks_dir().join(&id);
     if pack_dir.exists() {
         fs::remove_dir_all(&pack_dir).map_err(|e| e.to_string())?;
+    }
+    let instance_dir = get_modpack_instance_dir(&id);
+    if instance_dir.exists() {
+        fs::remove_dir_all(&instance_dir).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -2977,24 +3045,32 @@ fn open_modpack_folder(id: String) -> Result<(), String> {
     if !pack_dir.exists() {
         return Err(format!("Modpack folder '{}' does not exist", id));
     }
+    let open_dir = {
+        let instance_dir = get_modpack_instance_dir(&id);
+        if instance_dir.exists() {
+            instance_dir
+        } else {
+            pack_dir
+        }
+    };
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")
-            .arg(pack_dir.to_string_lossy().as_ref())
+            .arg(open_dir.to_string_lossy().as_ref())
             .spawn()
             .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
-            .arg(pack_dir.to_string_lossy().as_ref())
+            .arg(open_dir.to_string_lossy().as_ref())
             .spawn()
             .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open")
-            .arg(pack_dir.to_string_lossy().as_ref())
+            .arg(open_dir.to_string_lossy().as_ref())
             .spawn()
             .map_err(|e| e.to_string())?;
     }

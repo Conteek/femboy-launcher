@@ -50,7 +50,6 @@ function parseVersionFilters(value?: string): VersionFilterSettings {
   try {
     const parsed = JSON.parse(value) as Partial<VersionFilterSettings>;
     return {
-      installedOnly: parsed.installedOnly === true,
       types: {
         ...DEFAULT_VERSION_FILTERS.types,
         ...(parsed.types ?? {}),
@@ -62,6 +61,8 @@ function parseVersionFilters(value?: string): VersionFilterSettings {
 }
 
 function getVersionType(id: string): VersionTypeFilter {
+  const lower = id.toLowerCase();
+  if (lower.includes('snapshot') || /^\d{2}w\d{1,2}[a-z]$/i.test(id)) return 'snapshots';
   if (id.startsWith('ForgeOptifine ')) return 'forgeOptifine';
   if (id.startsWith('Forge ')) return 'forge';
   if (id.startsWith('Fabric ')) return 'fabric';
@@ -70,7 +71,6 @@ function getVersionType(id: string): VersionTypeFilter {
 }
 
 function filterVersions(versions: VersionInfo[], filters: VersionFilterSettings): VersionInfo[] {
-  if (filters.installedOnly) return versions.filter((version) => version.installed);
   return versions.filter((version) => filters.types[getVersionType(version.id)]);
 }
 
@@ -1678,9 +1678,12 @@ function App() {
       });
 
       // RPC: in-game status
+      const rpcVersion = selectedVersion.isModpack && selectedVersion.modpackVersion
+        ? versionDisplayName(selectedVersion.modpackVersion)
+        : versionDisplayName(selectedVersion.id);
       invoke('set_rpc_activity', {
         details: t().rpcInGame,
-        state: t().rpcPlayingOn(versionDisplayName(selectedVersion.id)),
+        state: t().rpcPlayingOn(rpcVersion),
       }).catch(() => { });
 
       setTimeout(() => setState('idle'), 2000);

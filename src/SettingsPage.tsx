@@ -2,16 +2,11 @@ import { X, ChevronDown } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 import { t, type Locale } from './i18n';
+import { DEFAULT_VERSION_FILTERS, type JrePreference, type VersionFilterSettings, type VersionTypeFilter } from './settingsTypes';
+export { DEFAULT_VERSION_FILTERS, type JrePreference, type VersionFilterSettings, type VersionTypeFilter };
 
 export const RAM_STEPS_GIB = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 const MAIN_RAM_TICKS_GIB = new Set([1, 2, 3, 4, 6, 8, 10, 12, 14, 16]);
-export type JrePreference = 'recommended' | '8' | '17' | '21' | '25';
-export type VersionTypeFilter = 'vanilla' | 'forge' | 'forgeOptifine' | 'fabric' | 'neoforge';
-
-export interface VersionFilterSettings {
-  types: Record<VersionTypeFilter, boolean>;
-  installedOnly: boolean;
-}
 
 const getJreOptions = (): Array<{ value: JrePreference; label: string }> => [
   { value: 'recommended', label: t().jreRecommended },
@@ -43,18 +38,9 @@ const VERSION_FILTER_OPTIONS: Array<{ key: VersionTypeFilter; label: string }> =
   { key: 'forgeOptifine', label: 'ForgeOptifine' },
   { key: 'fabric', label: 'Fabric' },
   { key: 'neoforge', label: 'NeoForge' },
+  { key: 'snapshots', label: 'Snapshots' },
 ];
 
-export const DEFAULT_VERSION_FILTERS: VersionFilterSettings = {
-  types: {
-    vanilla: true,
-    forge: true,
-    forgeOptifine: true,
-    fabric: true,
-    neoforge: true,
-  },
-  installedOnly: false,
-};
 
 const ACCENT_PRESETS = [
   { value: '#ffc6b2', label: 'Default' },
@@ -95,7 +81,7 @@ export default function SettingsPage({
   );
 
   const fill = `${(idx / (RAM_STEPS_GIB.length - 1)) * 100}%`;
-  const typeFiltersDisabled = versionFilters.installedOnly;
+  const typeFiltersDisabled = false;
 
   const setTypeFilter = (key: VersionTypeFilter, checked: boolean) => {
     onVersionFiltersChange({
@@ -107,18 +93,6 @@ export default function SettingsPage({
     });
   };
 
-  const setInstalledOnly = (checked: boolean) => {
-    onVersionFiltersChange({
-      installedOnly: checked,
-      types: {
-        vanilla: !checked,
-        forge: !checked,
-        forgeOptifine: !checked,
-        fabric: !checked,
-        neoforge: !checked,
-      },
-    });
-  };
 
   const isPreset = ACCENT_PRESETS.some((p) => p.value.toLowerCase() === accentColor.toLowerCase());
 
@@ -232,21 +206,12 @@ export default function SettingsPage({
                 >
                   <input
                     type="checkbox"
-                    checked={!typeFiltersDisabled && versionFilters.types[option.key]}
-                    disabled={typeFiltersDisabled}
+                    checked={versionFilters.types[option.key]}
                     onChange={(e) => setTypeFilter(option.key, e.target.checked)}
                   />
                   <span>{option.label}</span>
                 </label>
               ))}
-              <label className="version-filter-option">
-                <input
-                  type="checkbox"
-                  checked={versionFilters.installedOnly}
-                  onChange={(e) => setInstalledOnly(e.target.checked)}
-                />
-                <span>{t().installedOnly}</span>
-              </label>
             </div>
           )}
         </div>
