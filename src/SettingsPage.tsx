@@ -29,6 +29,8 @@ interface SettingsPageProps {
   theme: 'system' | 'light' | 'dark';
   onAccentChange: (color: string) => void;
   onThemeChange: (theme: 'system' | 'light' | 'dark') => void;
+  discordRpcEnabled: boolean;
+  onDiscordRpcChange: (enabled: boolean) => void;
   onClose: () => void;
 }
 
@@ -43,8 +45,8 @@ const VERSION_FILTER_OPTIONS: Array<{ key: VersionTypeFilter; label: string }> =
 
 
 const ACCENT_PRESETS = [
-  { value: '#ffc6b2', label: 'Default' },
   { value: '#ff7db3', label: 'Pink' },
+  { value: '#ffc6b2', label: 'Peach' },
   { value: '#ecdf4b', label: 'Yellow' },
 ];
 
@@ -61,6 +63,8 @@ export default function SettingsPage({
   onLocaleChange,
   onAccentChange,
   onThemeChange,
+  discordRpcEnabled,
+  onDiscordRpcChange,
   onClose,
 }: SettingsPageProps) {
   const [version, setVersion] = useState<string>('');
@@ -297,9 +301,9 @@ export default function SettingsPage({
                 {!isPreset
                   ? <span className="accent-color-hex">{accentColor}</span>
                   : <span
-                      className="accent-color-hex accent-color-hex--label"
-                      style={{ color: lastCustomColor.toLowerCase() === '#ffffff' ? 'rgba(0,0,0,0.75)' : undefined }}
-                    >Custom</span>
+                    className="accent-color-hex accent-color-hex--label"
+                    style={{ color: lastCustomColor.toLowerCase() === '#ffffff' ? 'rgba(0,0,0,0.75)' : undefined }}
+                  >Custom</span>
                 }
                 <input
                   ref={colorInputRef}
@@ -311,6 +315,25 @@ export default function SettingsPage({
                 />
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* OTHER SECTION */}
+        <div className="settings-section-label">{t().sectionOther}</div>
+        <div className="setting-block">
+          <div className="setting-row-header single">
+            <span className="setting-name">{t().discordRpc}</span>
+            <span className="setting-value">
+              <label className="custom-toggle-wrapper" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  className="custom-toggle-checkbox"
+                  checked={discordRpcEnabled}
+                  onChange={(e) => onDiscordRpcChange(e.target.checked)}
+                />
+                <span className="custom-toggle" aria-hidden="true" />
+              </label>
+            </span>
           </div>
         </div>
 

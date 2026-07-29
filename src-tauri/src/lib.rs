@@ -68,6 +68,7 @@ struct VersionEntry {
 struct VersionInfo {
     id: String,
     installed: bool,
+    version_type: String,
 }
 
 #[allow(dead_code)]
@@ -1415,20 +1416,38 @@ fn get_local_versions() -> Vec<VersionInfo> {
                 if file_type.is_dir() {
                     let dir_name = entry.file_name().to_string_lossy().to_string();
                     let json_path = entry.path().join(format!("{}.json", dir_name));
+                    // Try to read a "type" field from the local version json; fallback to "release"
+                    let local_type = if json_path.exists() {
+                        if let Ok(content) = fs::read_to_string(&json_path) {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                                json["type"].as_str().unwrap_or("release").to_string()
+                            } else {
+                                "release".to_string()
+                            }
+                        } else {
+                            "release".to_string()
+                        }
+                    } else {
+                        "release".to_string()
+                    };
+
                     if json_path.exists() {
                         if let Some((mc, forge)) = dir_name.split_once("-forge-") {
                             result.push(VersionInfo {
                                 id: format!("Forge {} | {}", mc, forge),
                                 installed: true,
+                                version_type: local_type.clone(),
                             });
                             result.push(VersionInfo {
                                 id: format!("ForgeOptifine {} | {}", mc, forge),
                                 installed: true,
+                                version_type: local_type.clone(),
                             });
                         } else if let Some((mc, fabric)) = dir_name.split_once("-fabric-") {
                             result.push(VersionInfo {
                                 id: format!("Fabric {} | {}", mc, fabric),
                                 installed: true,
+                                version_type: local_type.clone(),
                             });
                         } else if let Some(loader) = dir_name.strip_prefix("neoforge-") {
                             // Try to find MC version from the JSON
@@ -1468,12 +1487,14 @@ fn get_local_versions() -> Vec<VersionInfo> {
                             result.push(VersionInfo {
                                 id: display_id,
                                 installed: true,
+                                version_type: local_type.clone(),
                             });
                         } else {
                             // Vanilla
                             result.push(VersionInfo {
                                 id: dir_name.clone(),
                                 installed: true,
+                                version_type: local_type.clone(),
                             });
                         }
                     }
@@ -1542,81 +1563,104 @@ async fn get_versions() -> Result<Vec<VersionInfo>, String> {
 
     let game_dir = get_game_dir();
 
-    // Only release versions >= 1.6, in manifest order (newest first)
-    let release_versions: Vec<VersionEntry> = manifest
-        .versions
-        .into_iter()
-        .filter(|v| v.version_type == "release" && is_version_gte_1_6(&v.id))
-        .collect();
-
+    // Iterate the manifest in original order (newest first) and group snapshots with the next release encountered.
     let mut result: Vec<VersionInfo> = Vec::new();
+    let mut pending_snapshots: Vec<VersionInfo> = Vec::new();
 
-    for v in &release_versions {
-        // Check if Forge supports this MC version
-        if let Some(forge_builds) = forge_meta.get(&v.id) {
-            if let Some(last_build) = forge_builds.last() {
-                // Build ID from maven entry: "1.12.2-14.23.5.2864" -> forge_build = "14.23.5.2864"
-                let forge_build = last_build
-                    .strip_prefix(&format!("{}-", v.id))
-                    .unwrap_or(last_build);
-                let forge_dir_id = format!("{}-forge-{}", v.id, forge_build);
-                let display_id = format!("Forge {} | {}", v.id, forge_build);
-                let optifine_id = format!("ForgeOptifine {} | {}", v.id, forge_build);
-                let forge_json_path = game_dir
-                    .join("versions")
-                    .join(&forge_dir_id)
-                    .join(format!("{}.json", forge_dir_id));
-                let installed = forge_json_path.exists();
-                result.push(VersionInfo {
-                    id: display_id,
-                    installed,
-                });
-                result.push(VersionInfo {
-                    id: optifine_id,
-                    installed,
-                });
-            }
-        }
-
-        // Check if Fabric supports this MC version
-        if let Some(loader_ver) = &latest_fabric_loader {
-            if fabric_games.contains(&v.id) {
-                let fabric_dir_id = format!("{}-fabric-{}", v.id, loader_ver);
-                let display_id = format!("Fabric {} | {}", v.id, loader_ver);
-                let fabric_json_path = game_dir
-                    .join("versions")
-                    .join(&fabric_dir_id)
-                    .join(format!("{}.json", fabric_dir_id));
-                result.push(VersionInfo {
-                    id: display_id,
-                    installed: fabric_json_path.exists(),
-                });
-            }
-        }
-
-        // Check if NeoForge supports this MC version
-        if let Some(loader_ver) = neoforge_meta.get(&v.id) {
-            let neoforge_dir_id = format!("neoforge-{}", loader_ver);
-            let display_id = format!("NeoForge {} | {}", v.id, loader_ver);
-            let neoforge_json_path = game_dir
+    for v in &manifest.versions {
+        if v.version_type == "snapshot" {
+            // Collect snapshots until we hit the next release, then flush them before that release
+            let snapshot_json_path = game_dir
                 .join("versions")
-                .join(&neoforge_dir_id)
-                .join(format!("{}.json", neoforge_dir_id));
+                .join(&v.id)
+                .join(format!("{}.json", &v.id));
+            pending_snapshots.push(VersionInfo {
+                id: v.id.clone(),
+                installed: snapshot_json_path.exists(),
+                version_type: v.version_type.clone(),
+            });
+            continue;
+        }
+
+        // At this point, v is not a snapshot. If it's a release >= 1.6, flush any collected snapshots and then emit variants for this release.
+        if v.version_type == "release" {
+            if !is_version_gte_1_6(&v.id) {
+                // skip old releases
+                continue;
+            }
+
+            // Flush snapshots collected before this release so they appear above the release in the list
+            if !pending_snapshots.is_empty() {
+                // pending_snapshots is collected in manifest order (newest first) — keep that order
+                result.extend(pending_snapshots.drain(..));
+            }
+
+            // For this release, push variants in the desired order: ForgeOptifine, Forge, NeoForge, Fabric, Vanilla
+            if let Some(forge_builds) = forge_meta.get(&v.id) {
+                if let Some(last_build) = forge_builds.last() {
+                    let forge_build = last_build
+                        .strip_prefix(&format!("{}-", v.id))
+                        .unwrap_or(last_build);
+                    let forge_dir_id = format!("{}-forge-{}", v.id, forge_build);
+                    let optifine_id = format!("ForgeOptifine {} | {}", v.id, forge_build);
+                    let forge_id = format!("Forge {} | {}", v.id, forge_build);
+                    let forge_json_path = game_dir
+                        .join("versions")
+                        .join(&forge_dir_id)
+                        .join(format!("{}.json", forge_dir_id));
+                    let installed = forge_json_path.exists();
+                    // Optifine first
+                    result.push(VersionInfo { id: optifine_id, installed, version_type: v.version_type.clone() });
+                    result.push(VersionInfo { id: forge_id, installed, version_type: v.version_type.clone() });
+                }
+            }
+
+            if let Some(loader_ver) = neoforge_meta.get(&v.id) {
+                let neoforge_dir_id = format!("neoforge-{}", loader_ver);
+                let display_id = format!("NeoForge {} | {}", v.id, loader_ver);
+                let neoforge_json_path = game_dir
+                    .join("versions")
+                    .join(&neoforge_dir_id)
+                    .join(format!("{}.json", neoforge_dir_id));
+                result.push(VersionInfo {
+                    id: display_id,
+                    installed: neoforge_json_path.exists(),
+                    version_type: v.version_type.clone(),
+                });
+            }
+
+            if let Some(loader_ver) = &latest_fabric_loader {
+                if fabric_games.contains(&v.id) {
+                    let fabric_dir_id = format!("{}-fabric-{}", v.id, loader_ver);
+                    let display_id = format!("Fabric {} | {}", v.id, loader_ver);
+                    let fabric_json_path = game_dir
+                        .join("versions")
+                        .join(&fabric_dir_id)
+                        .join(format!("{}.json", fabric_dir_id));
+                    result.push(VersionInfo {
+                        id: display_id,
+                        installed: fabric_json_path.exists(),
+                        version_type: v.version_type.clone(),
+                    });
+                }
+            }
+
+            // Then vanilla version
+            let vanilla_json_path = game_dir
+                .join("versions")
+                .join(&v.id)
+                .join(format!("{}.json", &v.id));
             result.push(VersionInfo {
-                id: display_id,
-                installed: neoforge_json_path.exists(),
+                id: v.id.clone(),
+                installed: vanilla_json_path.exists(),
+                version_type: v.version_type.clone(),
             });
         }
+    }
 
-        // Then vanilla version
-        let vanilla_json_path = game_dir
-            .join("versions")
-            .join(&v.id)
-            .join(format!("{}.json", &v.id));
-        result.push(VersionInfo {
-            id: v.id.clone(),
-            installed: vanilla_json_path.exists(),
-        });
+    // If any snapshots remain (older than the oldest release in the manifest), append them at the end
+    if !pending_snapshots.is_empty() {
+        result.extend(pending_snapshots.drain(..));
     }
 
     Ok(result)
@@ -3406,7 +3450,17 @@ fn toggle_mod(modpack_id: String, filename: String) -> Result<String, String> {
 pub fn run() {
     let _ = std::fs::write("update.log", ""); // Clear update log on startup
     let rpc = Arc::new(rpc::Rpc::new());
-    rpc.connect();
+
+    // Load saved settings and only connect RPC if discordRpcEnabled isn't explicitly "false" (default: enabled)
+    let discord_enabled = load_settings()
+        .ok()
+        .and_then(|s| s.get("discordRpcEnabled").and_then(|v| v.as_str().map(|s| s.to_string())))
+        .map(|s| s != "false")
+        .unwrap_or(true);
+
+    if discord_enabled {
+        rpc.connect();
+    }
 
     tauri::Builder::default()
         .manage(rpc)

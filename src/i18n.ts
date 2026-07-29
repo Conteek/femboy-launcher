@@ -62,6 +62,9 @@ export interface Strings {
   settingsTitle: string;
   sectionGame: string;
   sectionAppearance: string;
+  sectionOther: string;
+  discordRpc: string;
+  discordRpcDesc: string;
   ram: string;
   mib: string;
   versionList: string;
@@ -189,6 +192,9 @@ const ru: Strings = {
   settingsTitle: 'Настройки',
   sectionGame: 'Игра',
   sectionAppearance: 'Внешний вид',
+  sectionOther: 'Другое',
+  discordRpc: 'Discord Rich Presence',
+  discordRpcDesc: 'Показывать статусы в Discord (Rich Presence)',
   ram: 'Оперативная память',
   mib: ' МиБ',
   versionList: 'Список версий',
@@ -315,6 +321,9 @@ const en: Strings = {
   settingsTitle: 'Settings',
   sectionGame: 'Game',
   sectionAppearance: 'Appearance',
+  sectionOther: 'Other',
+  discordRpc: 'Discord Rich Presence',
+  discordRpcDesc: 'Show Discord Rich Presence status',
   ram: 'RAM',
   mib: ' MiB',
   versionList: 'Version list',

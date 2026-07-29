@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAutoUpdate } from './useAutoUpdate';
@@ -21,6 +21,7 @@ import StatisticsPanel from './StatisticsPanel';
 interface VersionInfo {
   id: string;
   installed: boolean;
+  version_type?: string;
   isModpack?: boolean;
   modpackId?: string;
   modpackVersion?: string;
@@ -60,9 +61,23 @@ function parseVersionFilters(value?: string): VersionFilterSettings {
   }
 }
 
-function getVersionType(id: string): VersionTypeFilter {
+function getVersionType(idOrInfo: string | VersionInfo): VersionTypeFilter {
+  const id = typeof idOrInfo === 'string' ? idOrInfo : idOrInfo.id;
+  const versionType = typeof idOrInfo === 'string' ? undefined : idOrInfo.version_type;
+
   const lower = id.toLowerCase();
-  if (lower.includes('snapshot') || /^\d{2}w\d{1,2}[a-z]$/i.test(id)) return 'snapshots';
+  // Recognize snapshots and pre-release forms robustly:
+  // - Mojang snapshots like "23w14a"
+  // - Explicit "snapshot" word
+  // - RC / pre / preview / alpha / beta markers
+  const snapshotRegex = /\b\d{2}w\d{1,2}[a-z]\b/i; // matches 23w14a etc
+  const preReleaseRegex = /\b(?:rc|pre|preview|alpha|beta)\b/i;
+
+  if (versionType === 'snapshot') return 'snapshots';
+  if (lower.includes('snapshot') || snapshotRegex.test(lower) || preReleaseRegex.test(lower)) {
+    return 'snapshots';
+  }
+
   if (id.startsWith('ForgeOptifine ')) return 'forgeOptifine';
   if (id.startsWith('Forge ')) return 'forge';
   if (id.startsWith('Fabric ')) return 'fabric';
@@ -71,7 +86,7 @@ function getVersionType(id: string): VersionTypeFilter {
 }
 
 function filterVersions(versions: VersionInfo[], filters: VersionFilterSettings): VersionInfo[] {
-  return versions.filter((version) => filters.types[getVersionType(version.id)]);
+  return versions.filter((version) => filters.types[getVersionType(version)]);
 }
 
 export type Account =
@@ -1051,16 +1066,68 @@ function ModpackDetailsPanel({ modpack }: ModpackDetailsPanelProps) {
 function ModpacksList({ modpacks, selectedModpackId, onSelect, onOpenManager }: ModpacksListProps) {
   const selectedModpack = modpacks.find(mp => mp.id === selectedModpackId);
   const listRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateNav = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const left = el.scrollLeft;
+    const client = el.clientWidth;
+    const total = el.scrollWidth;
+    setCanScrollLeft(left > 0);
+    setCanScrollRight(Math.ceil(left + client) < total - 1);
+  }, []);
+
+  useLayoutEffect(() => {
+    updateNav();
+    const el = listRef.current;
+    if (!el) return;
+    const onScroll = () => updateNav();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    let ro: ResizeObserver | null = null;
+    if ((window as any).ResizeObserver) {
+      ro = new ResizeObserver(updateNav);
+      ro.observe(el);
+    }
+    window.addEventListener('resize', updateNav);
+    return () => {
+      el.removeEventListener('scroll', onScroll as any);
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', updateNav);
+    };
+  }, [updateNav]);
+
+  useEffect(() => {
+    updateNav();
+    const el = listRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', updateNav, { passive: true });
+    let ro: ResizeObserver | null = null;
+    if ((window as any).ResizeObserver) {
+      ro = new ResizeObserver(updateNav);
+      ro.observe(el);
+    }
+    window.addEventListener('resize', updateNav);
+    return () => {
+      el.removeEventListener('scroll', updateNav);
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', updateNav);
+    };
+  }, [updateNav]);
+
 
   const scrollLeft = () => {
     if (listRef.current) {
       listRef.current.scrollBy({ left: -166, behavior: 'smooth' });
+      setTimeout(updateNav, 200);
     }
   };
 
   const scrollRight = () => {
     if (listRef.current) {
       listRef.current.scrollBy({ left: 166, behavior: 'smooth' });
+      setTimeout(updateNav, 200);
     }
   };
 
@@ -1074,10 +1141,10 @@ function ModpacksList({ modpacks, selectedModpackId, onSelect, onOpenManager }: 
           </button>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="modpack-nav-btn" onClick={scrollLeft}>
+          <button className="modpack-nav-btn" onClick={scrollLeft} disabled={!(listRef.current && listRef.current.scrollLeft > 0)} aria-disabled={!(listRef.current && listRef.current.scrollLeft > 0)}>
             <ChevronLeft size={18} />
           </button>
-          <button className="modpack-nav-btn" onClick={scrollRight}>
+          <button className="modpack-nav-btn" onClick={scrollRight} disabled={!(listRef.current && Math.ceil(listRef.current.scrollLeft + listRef.current.clientWidth) < listRef.current.scrollWidth - 1)} aria-disabled={!(listRef.current && Math.ceil(listRef.current.scrollLeft + listRef.current.clientWidth) < listRef.current.scrollWidth - 1)}>
             <ChevronRight size={18} />
           </button>
         </div>
@@ -1284,12 +1351,13 @@ function App() {
   const [ramMb, setRamMb] = useState(2048);
   const [jrePreference, setJrePreference] = useState<JrePreference>('recommended');
   const [locale, setLocaleState] = useState<Locale>(getLocale());
-  const [accentColor, setAccentColor] = useState<string>('#FFC6B2');
+  const [accentColor, setAccentColor] = useState<string>('#FF7DB3');
   const [theme, setTheme] = useState<'system' | 'light' | 'dark'>('system');
   const [versionFilters, setVersionFilters] = useState<VersionFilterSettings>(DEFAULT_VERSION_FILTERS);
   const settingsRef = useRef<Record<string, string>>({});
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
+  const [discordRpcEnabled, setDiscordRpcEnabled] = useState<boolean>(true);
 
   const [versions, setVersions] = useState<VersionInfo[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<VersionInfo | null>(null);
@@ -1324,6 +1392,7 @@ function App() {
 
   useEffect(() => {
     const init = async () => {
+      let discordEnabled = true;
       try {
         const settings: Record<string, string> = await invoke('load_settings');
         settingsRef.current = settings ?? {};
@@ -1349,15 +1418,21 @@ function App() {
 
         const savedVersionId = settings?.selectedVersion ?? null;
         loadVersions(savedVersionId ?? undefined);
+
+        // Discord RPC setting (default true)
+        const discordEnabled = settings?.discordRpcEnabled === undefined ? true : settings.discordRpcEnabled !== 'false';
+        setDiscordRpcEnabled(discordEnabled);
       } catch {
         loadVersions();
       }
       loadAccounts();
       loadModpacks();
-      invoke('set_rpc_activity', {
-        details: t().rpcInLauncher,
-        state: t().rpcBrowsingMain,
-      }).catch(() => { });
+      if (discordEnabled) {
+        invoke('set_rpc_activity', {
+          details: t().rpcInLauncher,
+          state: t().rpcBrowsingMain,
+        }).catch(() => { });
+      }
     };
     init();
   }, []);
@@ -1381,13 +1456,15 @@ function App() {
   // Listen for game_closed to reset RPC
   useEffect(() => {
     const unlisten = listen('game_closed', () => {
-      invoke('set_rpc_activity', {
-        details: t().rpcInLauncher,
-        state: t().rpcBrowsingMain,
-      }).catch(() => { });
+      if (discordRpcEnabled) {
+        invoke('set_rpc_activity', {
+          details: t().rpcInLauncher,
+          state: t().rpcBrowsingMain,
+        }).catch(() => { });
+      }
     });
     return () => { unlisten.then(f => f()); };
-  }, []);
+  }, [discordRpcEnabled]);
 
   const loadVersions = async (savedVersionId?: string) => {
     try {
@@ -1611,6 +1688,16 @@ function App() {
     saveSetting('theme', newTheme);
   }, [saveSetting]);
 
+  const handleDiscordRpcChange = useCallback((enabled: boolean) => {
+    setDiscordRpcEnabled(enabled);
+    saveSetting('discordRpcEnabled', String(enabled));
+    if (!enabled) {
+      invoke('clear_rpc').catch(() => { });
+    } else {
+      invoke('set_rpc_activity', { details: t().rpcInLauncher, state: t().rpcBrowsingMain }).catch(() => { });
+    }
+  }, [saveSetting]);
+
   useEffect(() => {
     const applyTheme = (t: 'system' | 'light' | 'dark') => {
       const isLight = t === 'light' || (t === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches);
@@ -1681,10 +1768,12 @@ function App() {
       const rpcVersion = selectedVersion.isModpack && selectedVersion.modpackVersion
         ? versionDisplayName(selectedVersion.modpackVersion)
         : versionDisplayName(selectedVersion.id);
-      invoke('set_rpc_activity', {
-        details: t().rpcInGame,
-        state: t().rpcPlayingOn(rpcVersion),
-      }).catch(() => { });
+      if (discordRpcEnabled) {
+        invoke('set_rpc_activity', {
+          details: t().rpcInGame,
+          state: t().rpcPlayingOn(rpcVersion),
+        }).catch(() => { });
+      }
 
       setTimeout(() => setState('idle'), 2000);
     } catch (e) {
@@ -1778,6 +1867,8 @@ function App() {
                   onLocaleChange={handleLocaleChange}
                   onAccentChange={handleAccentChange}
                   onThemeChange={handleThemeChange}
+                  discordRpcEnabled={discordRpcEnabled}
+                  onDiscordRpcChange={handleDiscordRpcChange}
                   onClose={() => setShowSettings(false)}
                 />
               </div>
@@ -1831,7 +1922,7 @@ function App() {
                   }}
                   onOpenManager={() => setShowModpacksManager(true)}
                 />
-                
+
                 <StatisticsPanel />
               </div>
             )}

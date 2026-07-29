@@ -3,7 +3,8 @@ const RadialProgress = ({ value = 50, size = 132, strokeWidth = 12 }) => {
         width: size,
         height: size,
         borderRadius: '50%',
-        background: `conic-gradient(#FFC6B2 ${value * 3.6}deg, #383838 0deg)`,
+        background: `conic-gradient(#FF7DB3 ${value * 3.6}deg, #383838 0deg)`,
+
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -20,7 +21,7 @@ const RadialProgress = ({ value = 50, size = 132, strokeWidth = 12 }) => {
         justifyContent: 'center',
         fontSize: size * 0.2,
         fontWeight: 500,
-        color: '#FFC6B2',
+        color: '#FF7DB3',
     };
 
     return (

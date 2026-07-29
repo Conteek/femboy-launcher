@@ -23,7 +23,7 @@
   --bg-tertiary: #3A3533;
   --bg-quaternary: #242222;
 
-  --accent: #FFC6B2;
+  --accent: #FF7DB3;
   --accent-hover: color-mix(in srgb, var(--accent) 85%, white);
   --accent-active: color-mix(in srgb, var(--accent) 90%, black);
 
@@ -1399,6 +1399,57 @@ body {
   padding-bottom: 20px;
 }
 
+/* Custom toggle for settings */
+.custom-toggle-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.custom-toggle-checkbox {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.custom-toggle {
+  width: 44px;
+  height: 24px;
+  background: var(--bg-quaternary);
+  border-radius: 999px;
+  display: inline-block;
+  position: relative;
+  transition: background 0.18s;
+  border: 1px solid var(--border);
+}
+
+.custom-toggle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+  border-radius: 50%;
+  transition: left 0.18s, background 0.18s;
+}
+
+.custom-toggle-checkbox:checked+.custom-toggle {
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%);
+  border-color: var(--accent);
+}
+
+.custom-toggle-checkbox:checked+.custom-toggle::after {
+  left: 24px;
+  background: var(--bg-primary);
+}
+
+
 .manage-modpacks-btn {
   opacity: 0;
   pointer-events: none;
@@ -1441,6 +1492,14 @@ body {
 .modpack-nav-btn:hover {
   background: rgba(255, 255, 255, 0.1);
   color: var(--text-primary);
+}
+
+.modpack-nav-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  pointer-events: none;
 }
 
 .modpacks-list-layout {
